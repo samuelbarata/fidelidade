@@ -5,6 +5,10 @@
 //! cargo run --example fidelidade -- policies
 //! cargo run --example fidelidade -- list [POLICY_NUMBER] [--json]
 //! cargo run --example fidelidade -- download <DOCUMENT_ID> [DIR]
+//! cargo run --example fidelidade -- receipts [--json]
+//! cargo run --example fidelidade -- receipt <RECEIPT_NUMBER> [--json]
+//! cargo run --example fidelidade -- detail <POLICY_NUMBER> [--json]
+//! cargo run --example fidelidade -- coverages <POLICY_NUMBER> [--json]
 //! ```
 //!
 //! Credentials come from `FIDELIDADE_NIF` / `FIDELIDADE_PASSWORD`, read from the
@@ -76,12 +80,28 @@ async fn login() -> Result<Client, BoxError> {
     Ok(client)
 }
 
+async fn find_policy(client: &Client, number: &str) -> Result<fidelidade::Policy, BoxError> {
+    client
+        .policies()
+        .await?
+        .into_iter()
+        .find(|p| p.number == number)
+        .ok_or_else(|| format!("no policy {number}").into())
+}
+
 /// Reuse the saved session if it is still alive, otherwise log in.
 async fn connect() -> Result<Client, BoxError> {
     if let Ok(raw) = std::fs::read(session_path()) {
         let state: SessionState = serde_json::from_slice(&raw)?;
         let client = Client::from_session(state, Config::default())?;
         if client.is_authenticated().await? {
+            // The portal renews a stale session through the persistent-login cookie and
+            // rotates cookies as it goes: keep the fresh ones, or the next run starts from
+            // the old set again.
+            write_private(
+                &session_path(),
+                &serde_json::to_vec_pretty(&client.session()?)?,
+            )?;
             return Ok(client);
         }
         eprintln!("saved session expired, logging in again");
@@ -111,7 +131,7 @@ async fn main() -> Result<(), BoxError> {
             eprintln!("logged in as NIF {}", client.nif());
         }
         ["policies"] => {
-            let policies = connect().await?.policies().await?;
+            let policies = connect().await?.policies_with_details().await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&policies)?);
             } else {
@@ -181,9 +201,72 @@ async fn main() -> Result<(), BoxError> {
                 target.display()
             );
         }
+        ["receipts"] => {
+            let receipts = connect().await?.receipts_due().await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&receipts)?);
+            } else if receipts.is_empty() {
+                println!("no receipts waiting to be paid");
+            } else {
+                for r in receipts {
+                    println!(
+                        "{}  {:>9.2} EUR  {}  ({}, {})",
+                        r.due_date,
+                        r.amount_cents as f64 / 100.0,
+                        r.number,
+                        r.product,
+                        r.payment_method
+                    );
+                }
+            }
+        }
+        ["receipt", number] => {
+            let client = connect().await?;
+            let receipt = client
+                .receipts_due()
+                .await?
+                .into_iter()
+                .find(|r| r.number == *number)
+                .ok_or_else(|| format!("no receipt {number}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&client.receipt(&receipt).await?)?
+            );
+        }
+        ["detail", number] => {
+            let client = connect().await?;
+            let policy = find_policy(&client, number).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&client.policy_detail(&policy).await?)?
+            );
+        }
+        ["coverages", number] => {
+            let client = connect().await?;
+            let policy = find_policy(&client, number).await?;
+            let units = client.coverages(&policy).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&units)?);
+            } else {
+                for unit in units {
+                    println!("{}", unit.name);
+                    for (label, value) in &unit.info {
+                        println!("    {label}: {value}");
+                    }
+                    for c in &unit.coverages {
+                        println!(
+                            "  - {} [{:?}] {}",
+                            c.name,
+                            c.capital,
+                            c.deductible.as_deref().unwrap_or("")
+                        );
+                    }
+                }
+            }
+        }
         _ => {
             return Err(
-                "usage: login | policies [--json] | list [POLICY] [--json] | download <ID> [DIR]"
+                "usage: login | policies | list [POLICY] | download <ID> [DIR] | receipts | receipt <N> | detail <POLICY> | coverages <POLICY>   (--json where it applies)"
                     .into(),
             );
         }

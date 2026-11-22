@@ -54,12 +54,21 @@ for document in client.documents(None).await? {
 | The user's insurances | `Client::policies` |
 | Documents, of all insurances or one | `Client::documents(Option<&Policy>)` |
 | The file | `Client::download(&Document)` (`Download::is_pdf`) |
+| Renewal date, agent, units, receipt due date per policy | `Client::policies_with_details` |
+| Premium receipts waiting to be paid | `Client::receipts_due`, and `Client::receipt` for the dates and the Multibanco reference |
+| A policy's dates, premium and payment terms | `Client::policy_detail` |
+| What each insured unit is covered for (capital, deductible) | `Client::coverages` |
 
 `Document::id()` is a stable key derived from policy, date, kind and the position among
-identical entries (`0000000001:2026-11-16:fatura-recibo:0`): the portal gives documents
+identical entries (`0000000001:2030-11-16:fatura-recibo:0`): the portal gives documents
 no id of its own. It is the key to store for "have I already fetched this?", and the
 content hash is the airtight one. Documents that belong to no policy (capitalisation
 statements, letters) have `policy_number: None` and only show up in the "all" view.
+
+Amounts are integer cents (`2043` = 20.43 €). Some of these pages also show the **IBAN**, the
+direct-debit authorization number and the policyholder's details: the crate never reads them,
+so they cannot leak through a `Debug` print or a JSON dump. The address of an insured home and
+a life policy's insured person are personal data and are exposed as plain `info` rows.
 
 A login is the slow, fragile part: store `Client::session()` (encrypted: it holds live
 cookies) and resume it with `Client::from_session` until `Error::SessionExpired`.
@@ -105,8 +114,15 @@ exactly that, as plain requests:
 ## Status
 
 Verified against the live portal (November 2026, a real account without a second
-factor): login, listing policies, listing documents (all and per policy) and downloading
-a document.
+factor): login, listing policies, listing documents (all and per policy), downloading a
+document, and the home page's policy details, receipts due (list and detail), policy detail and
+coverages of a home policy (two units) and of a life policy.
+
+The portal sometimes answers with its own error page (served as a 200) or with the documents
+page minus its insurance filter, mostly right after it silently renewed a stale session. Both
+are reported as `UnexpectedResponse` instead of an empty list: running the call again a moment
+later is the right answer (never for a login). Keep the session you get back from
+`Client::session()` after use: the portal rotates cookies as it goes.
 
 Not exercised live: wrong-password pages (covered by mock tests only, with a heuristic
 for the portal's message), sessions that expire mid-run, and accounts that need more
