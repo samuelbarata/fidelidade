@@ -1,6 +1,6 @@
 [package]
 name = "fidelidade"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Unofficial read-only client for the Fidelidade (Portuguese insurer) customer area: policies and downloadable documents"
 keywords = ["fidelidade", "insurance", "portugal", "documents", "scraper"]
