@@ -1,3 +1,12 @@
+# v0.1.1
+
+_Released 2026-11-22_
+
+### Features
+- feat: policy details, coverages and receipts due
+
+---
+
 # v0.1.0
 
 _Released 2026-11-22_
