@@ -1,0 +1,192 @@
+image: rust:latest
+
+# Same pipeline shape as finances/application/money-scale: once a branch has
+# an open MR only the MR pipeline runs; tag pushes never start one.
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+stages:
+  - .pre
+  - release
+  - linting
+  - validate
+  - test
+  - build
+  - deploy
+
+variables:
+  # Build output on the runner's exec-enabled tmpfs (see money-scale's CI for
+  # why: the runner's disk fills up during compilation).
+  CARGO_TARGET_DIR: /ramfs/cargo-target
+  # Under CI_PROJECT_DIR so GitLab's cache archiver can reach it.
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+cache:
+  key: cargo-deps
+  paths:
+    - .cargo/registry
+    - .cargo/git
+
+include:
+  # Releases: a bot keeps a "Release" merge request (changelog + next semver version,
+  # bumped in Cargo.toml/Cargo.lock by scripts/set-version.sh). Merging it is the
+  # release; the publish job below fires when RELEASE-NOTES.md changes. See
+  # continuous-integration/release-please/README.md.
+  - project: 'continuous-integration/release-please'
+    ref: master
+    file: 'release.yml'
+    inputs:
+      version_scheme: semver
+      bump_script: scripts/set-version.sh
+  - project: 'continuous-integration/release-please'
+    ref: master
+    file: 'ensure-tags-on-master.yml'
+  - project: 'continuous-integration/rust'
+    ref: master
+    file: 'linting.yml'
+  - project: 'continuous-integration/rust'
+    ref: master
+    file: 'check.yml'
+  - project: 'continuous-integration/rust'
+    ref: master
+    file: 'test.yml'
+
+Release:
+  extends: .release
+  cache: []
+
+Ensure Tags On Master:
+  extends: .ensure_tags_on_master
+  cache: []
+
+Clippy:
+  stage: linting
+  needs: []
+  before_script:
+    - rustup component add clippy
+  script:
+    - cargo clippy --all-targets --locked -- -D warnings
+
+Security Audit:
+  stage: validate
+  needs: []
+  script:
+    # Scans Cargo.lock against the RustSec advisory database.
+    - cargo install cargo-audit --locked
+    - cargo audit
+
+Build Documentation:
+  stage: build
+  needs: []
+  script:
+    - cargo doc --no-deps
+
+Package Dry Run:
+  stage: build
+  needs: []
+  script:
+    # What `cargo publish` would upload must build on its own.
+    - cargo publish --dry-run --locked
+
+# Mirrors to GitHub (https://github.com/samuelbarata/fidelidade), where contributions
+# arrive. Fast-forward only, never forced; GitHub's own workflow (sync-to-gitlab.yml)
+# does the opposite for merged pull requests, and pushing a commit the other side
+# already has is a no-op, so the two cannot loop.
+#
+# Needs GITHUB_DEPLOY_KEY: a *File*-type, protected CI/CD variable holding the private
+# half of a write-enabled deploy key on the GitHub repository (the GitHub ruleset lists
+# deploy keys as bypass actors). Neither job is created until it exists.
+.github_mirror:
+  stage: deploy
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GITHUB_DEPLOY_KEY'
+  before_script:
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    # GitHub's published ed25519 host key (https://api.github.com/meta).
+    - echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+    # OpenSSH rejects a private key without a trailing newline, and CI/CD variables
+    # often lose it: always end the copy with one.
+    - |
+      { cat "$GITHUB_DEPLOY_KEY"; echo; } > ~/.ssh/github_deploy_key
+      chmod 600 ~/.ssh/github_deploy_key
+    - export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/github_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+# Every push to master is mirrored, whatever else happens in the pipeline: it depends
+# on nothing, and in particular not on tags or on the other jobs passing.
+Mirror to GitHub:
+  extends: .github_mirror
+  needs: []
+  script:
+    - git push git@github.com:samuelbarata/fidelidade.git HEAD:refs/heads/master
+
+# Release tags, but only those already on master: the release bot also moves a pending
+# tag around on the release branch, which must never become public. Runs after
+# "Ensure Tags On Master" so a missing tag has been repaired first. Never forced: a
+# published tag is never rewritten. Only publishing waits for this job.
+Mirror Tags to GitHub:
+  extends: .github_mirror
+  needs: [Ensure Tags On Master, Mirror to GitHub]
+  script:
+    - |
+      TAG_REFS=$(git tag --merged HEAD -l 'v*' | sed 's#.*#refs/tags/&:refs/tags/&#')
+      if [ -n "$TAG_REFS" ]; then
+        git push git@github.com:samuelbarata/fidelidade.git $TAG_REFS
+      fi
+
+# Publishes to crates.io when a release lands on master: merging the bot's Release
+# merge request changes RELEASE-NOTES.md, which (like in the other repos using
+# release-please) is what triggers production jobs, with no tag pipelines involved.
+# Only runs after the branch and the release tags were mirrored to GitHub, so a version
+# is never published from a source that is not in sync with the public repository.
+# Publishing is the only thing that waits for the tag; mirroring never does.
+#
+# Needs both CARGO_REGISTRY_TOKEN (crates.io API token, masked and *protected*) and
+# GITHUB_DEPLOY_KEY (for the mirror); without either the job is not created at all,
+# so there is no way to publish while skipping the mirror. On any other master push
+# the job is a manual one (a deliberate click, e.g. to retry a failed publish).
+#
+# It refuses to publish if RELEASE-NOTES.md and Cargo.toml disagree on the version,
+# and is a no-op when that version is already on crates.io (versions are immutable).
+Publish Crate:
+  stage: deploy
+  needs: [Test, Check, Clippy, Security Audit, Package Dry Run, Ensure Tags On Master, Mirror to GitHub, Mirror Tags to GitHub]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CARGO_REGISTRY_TOKEN && $GITHUB_DEPLOY_KEY'
+      changes:
+        paths: [RELEASE-NOTES.md]
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CARGO_REGISTRY_TOKEN && $GITHUB_DEPLOY_KEY'
+      when: manual
+      allow_failure: true
+  script:
+    - NAME=$(sed -n 's/^name *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+    - VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+    - echo "Crate $NAME $VERSION"
+    - MARKER_VERSION=$(grep -m1 -E '^# v' RELEASE-NOTES.md | sed -E 's/^# v//')
+    - |
+      if [ "$MARKER_VERSION" != "$VERSION" ]; then
+        echo "RELEASE-NOTES.md says v$MARKER_VERSION but Cargo.toml says $VERSION; refusing to publish."
+        exit 1
+      fi
+    # Publishing requires the release tag to exist.
+    - |
+      if [ -z "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
+        echo "The tag v$VERSION does not exist; refusing to publish."
+        exit 1
+      fi
+    # crates.io rejects API requests without a User-Agent.
+    - STATUS=$(curl -s -o /dev/null -w '%{http_code}' -A "fidelidade-ci (https://github.com/samuelbarata/fidelidade)" "https://crates.io/api/v1/crates/$NAME/$VERSION")
+    - |
+      case "$STATUS" in
+        200) echo "$NAME $VERSION is already on crates.io, nothing to publish."; exit 0 ;;
+        404) cargo publish --locked ;;
+        *) echo "Unexpected crates.io response $STATUS"; exit 1 ;;
+      esac
