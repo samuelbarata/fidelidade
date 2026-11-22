@@ -45,16 +45,22 @@ pub(crate) fn policies(doc: &Html, form: &Arc<Form>) -> Vec<Policy> {
                 name,
                 number,
                 category,
+                renewal_date: None,
+                agent: None,
+                risk_units: None,
+                payment_due: None,
                 handle: Handle {
                     form: form.clone(),
                     target,
                 },
+                detail: None,
+                coverage: None,
             })
         })
         .collect()
 }
 
-/// The document rows ("Fatura-Recibo / 16 de Novembro de 2026 / Apólice nº ...").
+/// The document rows ("Fatura-Recibo / 16 de Novembro de 2030 / Apólice nº ...").
 pub(crate) fn documents(doc: &Html, form: &Arc<Form>) -> Result<Vec<Document>> {
     let kind = selector(".inbox-left-structure-title");
     let date = selector(".inbox-left-structure-description");
@@ -113,13 +119,13 @@ pub(crate) fn documents(doc: &Html, form: &Arc<Form>) -> Result<Vec<Document>> {
 }
 
 /// `Apólice nº 0000000001` → `0000000001`.
-fn policy_number(text: &str) -> Option<String> {
+pub(crate) fn policy_number(text: &str) -> Option<String> {
     static RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)ap[óo]lice\s*n[ºo.]*\s*([A-Za-z0-9-]+)").unwrap());
     Some(RE.captures(text)?.get(1)?.as_str().to_owned())
 }
 
-/// `16 de Novembro de 2026` → 2026-11-16.
+/// `16 de Novembro de 2030` → 2030-11-16.
 pub(crate) fn parse_pt_date(text: &str) -> Option<NaiveDate> {
     static RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)(\d{1,2})\s+de\s+(\p{L}+)\s+de\s+(\d{4})").unwrap());
@@ -149,8 +155,8 @@ mod tests {
     #[test]
     fn portuguese_dates() {
         assert_eq!(
-            parse_pt_date("16 de Novembro de 2026"),
-            NaiveDate::from_ymd_opt(2026, 11, 16)
+            parse_pt_date("16 de Novembro de 2030"),
+            NaiveDate::from_ymd_opt(2030, 11, 16)
         );
         assert_eq!(
             parse_pt_date("1 de Março de 2025"),

@@ -25,8 +25,25 @@ pub(crate) fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The visible text of `el`: scripts and styles are skipped (the portal puts a tooltip
+/// `<script>` inside the title of long product names).
 pub(crate) fn text_of(el: ElementRef<'_>) -> String {
-    collapse_whitespace(&el.text().collect::<String>())
+    let mut out = String::new();
+    for node in el.descendants() {
+        let Some(text) = node.value().as_text() else {
+            continue;
+        };
+        let hidden = node.ancestors().any(|a| {
+            a.value()
+                .as_element()
+                .is_some_and(|e| matches!(e.name(), "script" | "style"))
+        });
+        if !hidden {
+            out.push_str(text);
+            out.push(' ');
+        }
+    }
+    collapse_whitespace(&out)
 }
 
 /// An HTML form as a browser would submit it.
@@ -138,6 +155,15 @@ mod tests {
         let sent = form.post_back("A$b");
         assert!(sent.contains(&("__EVENTTARGET".into(), "A$b".into())));
         assert!(sent.contains(&("__OSVSTATE".into(), "abc".into())));
+    }
+
+    #[test]
+    fn visible_text_skips_scripts() {
+        let doc = parse(
+            r#"<div id="t"><span>Seguro Longo</span><script>$('#x').tooltipster({ content: 'x' });</script> Nome</div>"#,
+        );
+        let el = doc.select(&selector("#t")).next().unwrap();
+        assert_eq!(text_of(el), "Seguro Longo Nome");
     }
 
     #[test]

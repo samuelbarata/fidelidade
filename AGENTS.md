@@ -35,6 +35,10 @@ src/
   auth.rs      Authenticator, Credentials: the single sign-on login
   client.rs    Client: policies, documents, download, session persistence
   pages.rs     Parsers for "Os Meus Documentos" (policy dropdown, document rows)
+  home.rs      Home page cards (renewal, agent, links) and matching them to policies
+  policy.rs    "Dados gerais" and the insured units / coverages
+  receipts.rs  "Recibos a pagamento" list and detail
+  parse.rs     Money, dates and the portal's label/value rows
   model.rs     Policy, Document (+ id()), Download, the internal postback Handle
   html.rs      Form replay (OutSystems postbacks), regex helpers for the page scripts
   session.rs   Cookie jar, SessionState and the HTTP wrapper around reqwest
@@ -65,6 +69,18 @@ a `Handle` (form + target) is tied to the listing that produced it.
   Placeholders: `123456789`, `0000000001`, `MR00000002`. Fixtures are synthetic and trimmed
   to what the parser reads; keep new ones that way. Downloaded documents are never test
   fixtures.
+- **Never read or expose bank or identity details.** The IBAN, the direct-debit authorization
+  number and the policyholder's details appear on the policy and receipt pages; the parsers pick
+  fields by label and must never grow a generic "all rows" output for those pages (the insured
+  unit's `info` rows are the one deliberate exception: they hold no bank data). Tests assert
+  that nothing of the sort reaches `Debug` or JSON.
+- **Never reuse the portal's guid URLs.** The server remembers the policy opened last for the
+  whole session, so a stored `PolicyDetail.aspx?Guid=...` stops working (it answers with the
+  error page). Walk the postback chain from the home page every time.
+- **An error page is an error.** The portal serves `Exceptions.ErrorPage.aspx` with a 200 and
+  sometimes a documents page without its insurance filter; `Client::check` and
+  `documents_page` turn both into `UnexpectedResponse`. Never let a degraded page parse into an
+  empty list.
 - **Never retry authentication failures.** A failed login can lock the account.
   `Error::is_auth_failure()` errors must reach the caller untouched. Don't add retry
   loops around anything in `auth.rs`, and never run the example's `login` in a loop.

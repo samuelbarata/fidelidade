@@ -26,6 +26,19 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # More than documents
+//!
+//! The customer area has a few more read-only pages worth having:
+//!
+//! * [`Client::policies_with_details`]: renewal date, agent and a receipt-due date per policy.
+//! * [`Client::receipts_due`] and [`Client::receipt`]: premiums waiting to be paid, with the
+//!   amount, due date and the Multibanco reference.
+//! * [`Client::policy_detail`]: dates, premium and how the policy is paid.
+//! * [`Client::coverages`]: per insured unit, every coverage with its capital and deductible.
+//!
+//! The IBAN, the direct-debit authorization number and the policyholder's details are shown on
+//! some of those pages and are **never read** by this crate.
+//!
 //! # Keeping the session
 //!
 //! A login is the slow, fragile part. [`Client::session`] gives a [`SessionState`] that can
@@ -54,14 +67,21 @@ mod auth;
 mod client;
 mod config;
 mod error;
+mod home;
 mod html;
 mod model;
 mod pages;
+mod parse;
+mod policy;
+mod receipts;
 mod session;
 
 pub use auth::{Authenticator, Credentials};
 pub use client::Client;
 pub use config::Config;
 pub use error::{Error, Result};
-pub use model::{Document, Download, Policy};
+pub use model::{
+    Capital, Coverage, DateRange, Document, Download, Multibanco, Policy, PolicyDetail, Receipt,
+    ReceiptDetail, RiskUnit,
+};
 pub use session::{CookieJarState, SessionState};

@@ -35,8 +35,22 @@ pub struct Policy {
     pub number: String,
     /// Product family derived from the portal's icon (`Vida`, `Casa`, ...), when present.
     pub category: Option<String>,
+    /// Next renewal (`Renovação a ...` on the home page).
+    pub renewal_date: Option<NaiveDate>,
+    /// Name of the agent or distributor, as the home page shows it.
+    pub agent: Option<String>,
+    /// How many insured units the policy has (`2 unidade(s) risco(s)`), for policies that
+    /// show it (home insurance, for example).
+    pub risk_units: Option<u32>,
+    /// Date a receipt of this policy has to be paid by, when the home page flags one.
+    pub payment_due: Option<NaiveDate>,
     #[serde(skip)]
     pub(crate) handle: Handle,
+    /// Where "Detalhe do seguro" and "Coberturas" lead, when the home page lists the policy.
+    #[serde(skip)]
+    pub(crate) detail: Option<Handle>,
+    #[serde(skip)]
+    pub(crate) coverage: Option<Handle>,
 }
 
 /// One entry of "Os Meus Documentos".
@@ -62,7 +76,7 @@ pub struct Document {
 
 impl Document {
     /// A key that identifies this document across listings, e.g.
-    /// `0000000001:2026-11-16:fatura-recibo:0`.
+    /// `0000000001:2030-11-16:fatura-recibo:0`.
     pub fn id(&self) -> String {
         format!(
             "{}:{}:{}:{}",
@@ -72,6 +86,133 @@ impl Document {
             self.ordinal
         )
     }
+}
+
+/// A premium receipt waiting to be paid ("Recibos a pagamento").
+#[derive(Clone, Debug, Serialize)]
+pub struct Receipt {
+    /// Receipt number.
+    pub number: String,
+    /// Amount in cents (`2043` = 20.43 €).
+    pub amount_cents: i64,
+    /// Product line as shown (`Vida Ind. Capitalização`).
+    pub product: String,
+    /// Policy the receipt belongs to.
+    pub policy_number: Option<String>,
+    /// Last day to pay.
+    pub due_date: NaiveDate,
+    /// How it is paid (`Débito Directo`, ...), as shown.
+    pub payment_method: String,
+    #[serde(skip)]
+    pub(crate) handle: Handle,
+}
+
+/// The detail page of a [`Receipt`].
+///
+/// The page also shows the IBAN and the direct-debit authorization; this crate leaves them
+/// out on purpose.
+#[derive(Clone, Debug, Serialize)]
+pub struct ReceiptDetail {
+    /// When the receipt was issued.
+    pub issued: Option<NaiveDate>,
+    /// Last day to pay.
+    pub due_date: Option<NaiveDate>,
+    /// The period the receipt covers.
+    pub period: Option<DateRange>,
+    /// The period of the insurance contract the receipt belongs to.
+    pub insurance_period: Option<DateRange>,
+    /// The Multibanco reference, for paying by hand instead of by direct debit.
+    pub multibanco: Option<Multibanco>,
+}
+
+/// A Multibanco payment reference.
+#[derive(Clone, Debug, Serialize)]
+pub struct Multibanco {
+    /// Entity code (`11111`).
+    pub entity: String,
+    /// Reference, digits only (`123456789`).
+    pub reference: String,
+    /// Amount in cents.
+    pub amount_cents: i64,
+}
+
+/// An inclusive range of days.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct DateRange {
+    /// First day.
+    pub from: NaiveDate,
+    /// Last day.
+    pub to: NaiveDate,
+}
+
+/// The "Dados gerais" tab of a policy.
+///
+/// The page also shows the IBAN, the direct-debit authorization and the policyholder's
+/// details; this crate leaves them out on purpose.
+#[derive(Clone, Debug, Serialize)]
+pub struct PolicyDetail {
+    /// `Data Início`.
+    pub started: Option<NaiveDate>,
+    /// `Data Renovação/Termo`: next renewal, or the end for fixed-term policies.
+    pub renews_or_ends: Option<NaiveDate>,
+    /// `Período Seguro`: the current insurance period.
+    pub period: Option<DateRange>,
+    /// The agent or distributor.
+    pub agent: Option<String>,
+    /// `Prémio Anual/Único` in cents.
+    pub premium_cents: Option<i64>,
+    /// `Periodicidade de Pagamento` (`anual`, `mensal`, ...), as shown.
+    pub payment_periodicity: Option<String>,
+    /// `Forma de Pagamento` (`cobrança bancária`, ...), as shown.
+    pub payment_method: Option<String>,
+}
+
+/// One insured unit of a policy: a dwelling, its contents, a vehicle...
+#[derive(Clone, Debug, Serialize)]
+pub struct RiskUnit {
+    /// How the portal labels it (`Fração 1234-567`, `Conteúdo 1234-567`).
+    pub name: String,
+    /// The unit's own data as `(label, value)` rows, in page order: plan, address,
+    /// occupation, insured capital... The labels depend on the kind of insurance. The address
+    /// of a home is personal data.
+    pub info: Vec<(String, String)>,
+    /// What the unit is covered for.
+    pub coverages: Vec<Coverage>,
+}
+
+impl RiskUnit {
+    /// The value of the info row called `label` (`"Valor do capital seguro"`), ignoring case
+    /// and accents.
+    pub fn info(&self, label: &str) -> Option<&str> {
+        let wanted = slug(label);
+        self.info
+            .iter()
+            .find(|(k, _)| slug(k) == wanted)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// One coverage ("cobertura") of a [`RiskUnit`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Coverage {
+    /// What is covered (`Inundações`).
+    pub name: String,
+    /// The insured capital.
+    pub capital: Capital,
+    /// The deductible ("franquia") as shown, when the coverage has one.
+    pub deductible: Option<String>,
+}
+
+/// The capital of a [`Coverage`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub enum Capital {
+    /// `Incluído`: covered, with no separate capital.
+    Included,
+    /// An amount in cents.
+    Cents(i64),
+    /// Anything else, as shown.
+    Other(String),
 }
 
 /// A downloaded file.
