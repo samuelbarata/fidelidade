@@ -19,7 +19,12 @@ whenever they change the site.
 fidelidade = "0.1"
 ```
 
-Requires Rust 1.88 or newer.
+Requires Rust 1.88 or newer. Until the first release is on crates.io, depend on the repository:
+
+```toml
+[dependencies]
+fidelidade = { git = "https://github.com/samuelbarata/fidelidade" }
+```
 
 ## Usage
 
